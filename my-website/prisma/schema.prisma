@@ -1,0 +1,375 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// User / Account
+model User {
+  id              String   @id @default(uuid())
+  email           String   @unique
+  username        String   @unique
+  passwordHash    String
+  isVerified      Boolean  @default(false) // True when ID document is approved
+  idCardStatus    String   @default("NOT_SUBMITTED") // NOT_SUBMITTED, PENDING, APPROVED, REJECTED
+  screeningStatus String   @default("NOT_STARTED") // NOT_STARTED, PENDING_REVIEW, PASSED, FAILED
+  onboardingStep  Int      @default(1) // 1: PDPA, 2: Profile & Emergency, 3: ID Upload, 4: Screening, 5: Completed
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  profile               Profile?
+  roles                 UserRole[]
+  emergencyContacts     EmergencyContact[]
+  consents              Consent[]
+  screeningAttempts     ScreeningAttempt[]
+  verificationDocuments VerificationDocument[]
+
+  // Future phases relations
+  hostedAccommodations  Accommodation[]
+  createdTrips          Trip[]
+  tripMemberships       TripMember[]
+  tripRoles             TripRole[]
+  driverApplications    DriverApplication[]
+  driverVotes           DriverVote[]
+  ratingsGiven          Rating[]              @relation("RatingAuthor")
+  ratingsReceived       Rating[]              @relation("RatingTarget")
+  messages              Message[]
+  reportsFiled          Report[]              @relation("ReportReporter")
+  reportsAgainst        Report[]              @relation("ReportReportedUser")
+  emergencyAlerts       EmergencyAlert[]
+  payments              Payment[]
+}
+
+model UserRole {
+  id        String   @id @default(uuid())
+  userId    String
+  role      String   // ADMIN, STAFF, HOST, USER
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, role])
+}
+
+model Profile {
+  id             String    @id @default(uuid())
+  userId         String    @unique
+  fullName       String
+  nickname       String?
+  phone          String?
+  gender         String?   // MALE, FEMALE, OTHER, PREFER_NOT_TO_SAY
+  birthDate      DateTime?
+  bio            String?
+  avatarUrl      String?
+  idCardNumber   String?   // Hashed / masked storage
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model EmergencyContact {
+  id           String   @id @default(uuid())
+  userId       String
+  name         String
+  relationship String   // Parent, Spouse, Sibling, Friend, Relative, Other
+  phone        String
+  altPhone     String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Consent {
+  id          String    @id @default(uuid())
+  userId      String
+  consentType String    // PDPA, TERMS, PRIVACY
+  version     String    @default("1.0")
+  agreed      Boolean   @default(true)
+  agreedAt    DateTime  @default(now())
+  ipAddress   String?
+  userAgent   String?
+  revokedAt   DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ScreeningAttempt {
+  id               String   @id @default(uuid())
+  userId           String
+  answersJson      String   // JSON array of answer scores
+  totalScore       Int
+  maxPossibleScore Int      @default(27)
+  riskLevel        String   // LOW, MODERATE, HIGH
+  status           String   // PASSED, PENDING_REVIEW, FAILED
+  nextEligibleDate DateTime // attemptDate + 3 days cooldown
+  reviewNotes      String?
+  reviewedBy       String?
+  attemptDate      DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationDocument {
+  id              String    @id @default(uuid())
+  userId          String
+  documentType    String    // IDCARD, SELFIE_WITH_IDCARD, DRIVING_LICENSE
+  fileUrl         String
+  fileName        String?
+  fileSize        Int?
+  status          String    @default("PENDING") // PENDING, APPROVED, REJECTED
+  rejectionReason String?
+  reviewedBy      String?
+  reviewedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// Accommodations (Phase 3 & future)
+model Accommodation {
+  id            String    @id @default(uuid())
+  hostId        String
+  name          String
+  description   String
+  province      String
+  address       String
+  pricePerNight Float
+  maxGuests     Int
+  imagesJson    String?   // JSON array of image URLs
+  status        String    @default("PENDING") // PENDING, APPROVED, REJECTED
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  host     User      @relation(fields: [hostId], references: [id], onDelete: Cascade)
+  trips    Trip[]
+  bookings Booking[]
+}
+
+// Trips (Phase 2 & future)
+model Trip {
+  id                String    @id @default(uuid())
+  creatorId         String
+  accommodationId   String?
+  title             String
+  description       String
+  province          String
+  coverImage        String?
+  startDate         DateTime
+  endDate           DateTime
+  maxMembers        Int
+  totalFuelDistance Float     @default(0) // Distance in km
+  fuelPricePerLiter Float     @default(35) // Fuel price in THB/liter
+  estimatedFuelCost Float     @default(0) // Total calculated fuel cost (distance * fuelPrice)
+  status            String    @default("OPEN") // OPEN, FULL, IN_PROGRESS, COMPLETED, CANCELLED
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  creator         User                @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  accommodation   Accommodation?      @relation(fields: [accommodationId], references: [id])
+  members         TripMember[]
+  roles           TripRole[]
+  driverApps      DriverApplication[]
+  driverVotes     DriverVote[]
+  messages        Message[]
+  emergencyAlerts EmergencyAlert[]
+  bookings        Booking[]
+}
+
+model TripMember {
+  id       String   @id @default(uuid())
+  tripId   String
+  userId   String
+  status   String   @default("REQUESTED") // REQUESTED, APPROVED, PAID, CANCELLED
+  joinedAt DateTime @default(now())
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([tripId, userId])
+}
+
+model TripRole {
+  id          String   @id @default(uuid())
+  tripId      String
+  userId      String?
+  roleName    String   // GUIDE, ACCOMMODATION_CARE, FOOD_SUPPLIES, DRIVER, etc.
+  description String?
+  createdAt   DateTime @default(now())
+
+  trip Trip  @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id])
+}
+
+model DriverApplication {
+  id            String   @id @default(uuid())
+  tripId        String
+  userId        String
+  licenseDocUrl String?
+  vehicleInfo   String?
+  status        String   @default("PENDING") // PENDING, APPROVED, SELECTED, REJECTED
+  createdAt     DateTime @default(now())
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model DriverVote {
+  id          String   @id @default(uuid())
+  tripId      String
+  voterId     String
+  candidateId String
+  createdAt   DateTime @default(now())
+
+  trip  Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  voter User @relation(fields: [voterId], references: [id], onDelete: Cascade)
+
+  @@unique([tripId, voterId])
+}
+
+model Rating {
+  id         String   @id @default(uuid())
+  authorId   String
+  targetId   String
+  tripId     String?
+  ratingType String   // MEMBER, DRIVER
+  score      Int      // 1-5
+  comment    String?
+  createdAt  DateTime @default(now())
+
+  author User @relation("RatingAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  target User @relation("RatingTarget", fields: [targetId], references: [id], onDelete: Cascade)
+}
+
+model Message {
+  id        String   @id @default(uuid())
+  tripId    String
+  userId    String
+  content   String
+  imageUrl  String?
+  createdAt DateTime @default(now())
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Report {
+  id             String   @id @default(uuid())
+  reporterId     String
+  reportedUserId String
+  tripId         String?
+  reason         String
+  details        String
+  status         String   @default("PENDING") // PENDING, INVESTIGATING, RESOLVED, DISMISSED
+  adminNotes     String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  reporter     User @relation("ReportReporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  reportedUser User @relation("ReportReportedUser", fields: [reportedUserId], references: [id], onDelete: Cascade)
+}
+
+model EmergencyAlert {
+  id         String    @id @default(uuid())
+  tripId     String
+  userId     String
+  latitude   Float
+  longitude  Float
+  notes      String?
+  status     String    @default("ACTIVE") // ACTIVE, RESOLVED
+  resolvedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  trip Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Booking {
+  id              String   @id @default(uuid())
+  tripId          String
+  accommodationId String
+  checkInDate     DateTime
+  checkOutDate    DateTime
+  totalAmount     Float
+  status          String   @default("PENDING") // PENDING_BOOKING, BOOKED, CHECKED_IN, CANCELLED
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  trip          Trip          @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  accommodation Accommodation @relation(fields: [accommodationId], references: [id], onDelete: Cascade)
+  payouts       HostPayout[]
+}
+
+model HostPayout {
+  id               String    @id @default(uuid())
+  bookingId        String
+  hostId           String
+  amount           Float
+  status           String    @default("PENDING") // PENDING, TRANSFERRED, FAILED
+  transferProofUrl String?
+  transferredAt    DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+}
+
+model Payment {
+  id          String   @id @default(uuid())
+  userId      String
+  tripId      String
+  amount      Float
+  platformFee Float    @default(0)
+  shareAmount Float    @default(0)
+  status      String   @default("PENDING") // PENDING, SUCCESS, REFUNDED, FAILED
+  gatewayRef  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model AppSettings {
+  id                    String   @id @default("default")
+  platformFeePerUser    Float    @default(50.0) // Flat fee per person
+  screeningThreshold    Int      @default(9) // Passing score threshold (<= 8 passes, 9+ requires review)
+  screeningCooldownDays Int      @default(3) // 3 days cooldown
+  emailSenderDomain     String   @default("noreply@togethergo.com")
+  smtpHost              String   @default("")
+  smtpPort              Int      @default(587)
+  smtpUser              String   @default("")
+  smtpPass              String   @default("")
+  smtpEnabled           Boolean  @default(false)
+  updatedAt             DateTime @updatedAt
+}
+
+// Email Logs (Phase 8)
+model EmailLog {
+  id          String   @id @default(uuid())
+  toEmail     String
+  toName      String?
+  subject     String
+  eventType   String   // IDENTITY_APPROVED, TRIP_JOIN_APPROVED, PAYMENT_SUCCESS, TRIP_REMINDER, BOOKING_CONFIRMED
+  bodyHtml    String
+  status      String   @default("PREVIEW") // PREVIEW, SENT, FAILED
+  errorMsg    String?
+  relatedId   String?  // tripId, paymentId, etc.
+  sentAt      DateTime?
+  createdAt   DateTime @default(now())
+}
+
+// Staff Assignments (Phase 5)
+model StaffAssignment {
+  id          String   @id @default(uuid())
+  userId      String   @unique
+  grantedBy   String
+  permissions String   @default("[]") // JSON array of permission strings
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
